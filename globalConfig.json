@@ -50,7 +50,49 @@
                     "title": "Accounts"
                 },
                 {
-                    "type": "loggingTab"
+                    "name": "logging",
+                    "title": "Logging",
+                    "entity": [
+                        {
+                            "type": "singleSelect",
+                            "label": "Log level",
+                            "options": {
+                                "disableSearch": true,
+                                "autoCompleteFields": [
+                                    {
+                                        "value": "DEBUG",
+                                        "label": "DEBUG"
+                                    },
+                                    {
+                                        "value": "INFO",
+                                        "label": "INFO"
+                                    },
+                                    {
+                                        "value": "WARNING",
+                                        "label": "WARNING"
+                                    },
+                                    {
+                                        "value": "ERROR",
+                                        "label": "ERROR"
+                                    },
+                                    {
+                                        "value": "CRITICAL",
+                                        "label": "CRITICAL"
+                                    }
+                                ]
+                            },
+                            "defaultValue": "INFO",
+                            "field": "loglevel",
+                            "required": true,
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "Log level must be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL",
+                                    "pattern": "^DEBUG|INFO|WARNING|ERROR|CRITICAL$"
+                                }
+                            ]
+                        }
+                    ]
                 }
             ],
             "title": "Configuration",
@@ -82,23 +124,51 @@
                             "required": true
                         },
                         {
-                            "type": "interval",
-                            "label": "Interval",
-                            "defaultValue": "300",
+                            "type": "text",
                             "field": "interval",
-                            "options": {
-                                "range": [
-                                    10,
-                                    301
-                                ]
-                            },
+                            "label": "Interval",
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "Interval must be either a non-negative number, CRON interval or -1.",
+                                    "pattern": "^((?:-1|\\d+(?:\\.\\d+)?)|(([\\*\\d{1,2}\\,\\-\\/]+\\s){4}[\\*\\d{1,2}\\,\\-\\/]+))$"
+                                },
+                                {
+                                    "type": "number",
+                                    "range": [
+                                        10,
+                                        301
+                                    ],
+                                    "errorMsg": "Interval must be between 10 and 301"
+                                }
+                            ],
                             "help": "Time interval of the data input, in seconds.",
-                            "required": true
+                            "required": true,
+                            "defaultValue": "300"
                         },
                         {
-                            "type": "index",
+                            "type": "singleSelect",
                             "field": "index",
-                            "label": "Index"
+                            "label": "Index",
+                            "defaultValue": "default",
+                            "options": {
+                                "endpointUrl": "data/indexes?search=isInternal=0+disabled=0",
+                                "denyList": "^_.*$",
+                                "createSearchChoice": true
+                            },
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "Index names must begin with a letter or a number and must contain only letters, numbers, underscores or hyphens.",
+                                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9\\\\_\\\\-]*$"
+                                },
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length of index name should be between 1 and 80.",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                }
+                            ]
                         },
                         {
                             "type": "singleSelect",
@@ -198,23 +268,51 @@
                             "required": true
                         },
                         {
-                            "type": "interval",
-                            "label": "Interval",
-                            "defaultValue": "300",
+                            "type": "text",
                             "field": "interval",
-                            "options": {
-                                "range": [
-                                    10,
-                                    301
-                                ]
-                            },
+                            "label": "Interval",
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "Interval must be either a non-negative number, CRON interval or -1.",
+                                    "pattern": "^((?:-1|\\d+(?:\\.\\d+)?)|(([\\*\\d{1,2}\\,\\-\\/]+\\s){4}[\\*\\d{1,2}\\,\\-\\/]+))$"
+                                },
+                                {
+                                    "type": "number",
+                                    "range": [
+                                        10,
+                                        301
+                                    ],
+                                    "errorMsg": "Interval must be between 10 and 301"
+                                }
+                            ],
                             "help": "Time interval of the data input, in seconds.",
-                            "required": true
+                            "required": true,
+                            "defaultValue": "300"
                         },
                         {
-                            "type": "index",
+                            "type": "singleSelect",
                             "field": "index",
-                            "label": "Index"
+                            "label": "Index",
+                            "defaultValue": "default",
+                            "options": {
+                                "endpointUrl": "data/indexes?search=isInternal=0+disabled=0",
+                                "denyList": "^_.*$",
+                                "createSearchChoice": true
+                            },
+                            "validators": [
+                                {
+                                    "type": "regex",
+                                    "errorMsg": "Index names must begin with a letter or a number and must contain only letters, numbers, underscores or hyphens.",
+                                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9\\\\_\\\\-]*$"
+                                },
+                                {
+                                    "type": "string",
+                                    "errorMsg": "Length of index name should be between 1 and 80.",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                }
+                            ]
                         },
                         {
                             "type": "singleSelect",
@@ -256,7 +354,6 @@
             "table": {
                 "actions": [
                     "edit",
-                    "enable",
                     "delete",
                     "clone"
                 ],
@@ -317,13 +414,13 @@
     "meta": {
         "name": "TA-nextdns-api",
         "restRoot": "ta_nextdns_api",
-        "version": "0.01",
+        "version": "1.1.0+a28cb7f",
         "displayName": "NextDNS API Collector for Splunk",
-        "schemaVersion": "0.0.8",
+        "schemaVersion": "0.0.9",
         "supportedThemes": [
             "light",
             "dark"
         ],
-        "_uccVersion": "5.49.0"
+        "_uccVersion": "5.55.0"
     }
 }
