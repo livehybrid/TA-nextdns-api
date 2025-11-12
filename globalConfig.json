@@ -325,24 +325,18 @@
                             "required": true
                         },
                         {
-                            "type": "text",
-                            "label": "Profile ID",
-                            "validators": [
-                                {
-                                    "type": "regex",
-                                    "errorMsg": "Device ID must match the format [a-zA-Z0-9]+.",
-                                    "pattern": "^[a-zA-Z0-9]+$"
-                                },
-                                {
-                                    "type": "string",
-                                    "errorMsg": "Length of value should be between 1 and 100",
-                                    "minLength": 1,
-                                    "maxLength": 100
-                                }
-                            ],
-                            "field": "profile",
-                            "help": "Profile to collect data for.",
-                            "required": true
+                            "type": "singleSelect",
+                            "label": "Profile",
+                            "required": true,
+                            "help": "Select a profile",
+                            "options": {
+                                "dependencies": [
+                                    "account"
+                                ],
+                                "endpointUrl": "ta_nextdns_api_select_profile",
+                                "labelField": "profile"
+                            },
+                            "field": "profile"
                         }
                     ],
                     "inputHelperModule": "getStream_helper",
