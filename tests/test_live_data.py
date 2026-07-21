@@ -66,14 +66,30 @@ def _wait_for(splunk, spl, timeout=90):
     return hits
 
 
+def _collector_diag(splunk):
+    """Pull the collectors' own log lines from _internal (search API, so no
+    file-permission issues) to explain a no-events failure: whether the input
+    ran, which URL it hit, and any exception."""
+    rows = splunk.search(
+        "search index=_internal earliest=-15m "
+        "(source=*ta-nextdns* OR source=*ta_nextdns* OR component=ExecProcessor) "
+        "(nextdns OR NextDNS OR getStats OR getStream OR api.nextdns.io OR mock) "
+        "| head 25 | table _time component log_level _raw",
+        earliest="-15m", count=25,
+    )
+    if not rows:
+        return "(no ta-nextdns lines in index=_internal — the modular inputs likely never executed)"
+    return "\n".join(f"  {r.get('component','')}/{r.get('log_level','')}: {r.get('_raw','')[:280]}" for r in rows)
+
+
 def test_stats_input_indexes_events(splunk, configured):
     # `domains` is one of the ten analytic types the Stats collector fetches;
     # each becomes sourcetype NextDNS_API_Stats:<type>. Read fields off `| spath`
     # (the emitted JSON), not sourcetype auto-kv, so the assertion is deterministic.
     hits = _wait_for(splunk, f'index={INDEX} sourcetype="NextDNS_API_Stats:domains" | spath')
     assert hits, (
-        "NextDNS_API_Stats produced no events — check the modular input ran, the "
-        "mock is reachable at NEXTDNS_API_BASE, and index=_internal for errors"
+        "NextDNS_API_Stats produced no events. Collector log lines:\n"
+        + _collector_diag(splunk)
     )
     markers = {h.get("mock_marker") for h in hits}
     assert "domains" in markers, f"unexpected Stats payload, mock_marker={markers}: {hits[0]}"
@@ -82,8 +98,8 @@ def test_stats_input_indexes_events(splunk, configured):
 def test_stream_input_indexes_events(splunk, configured):
     hits = _wait_for(splunk, f"index={INDEX} sourcetype=NextDNS_API_Stream | spath")
     assert hits, (
-        "NextDNS_API_Stream produced no events — check the streaming collector ran "
-        "and the mock stream endpoint responded"
+        "NextDNS_API_Stream produced no events. Collector log lines:\n"
+        + _collector_diag(splunk)
     )
     assert any(h.get("mock_marker") == "stream" for h in hits), (
         f"unexpected Stream payload: {hits[0]}"
