@@ -1,3 +1,17 @@
-splunktaucclib==8.0.0
-splunk-sdk==2.1.1
-solnlib==7.0.0
+#
+# Runtime dependencies vendored into package/lib/ by ucc-gen at build time so the
+# modular inputs can import them inside Splunk's bundled Python.
+#
+# getStats_helper / getStream_helper import `requests` at module top, so scheme
+# introspection loads it under Splunk 10's 3.9 runtime. requests is capped
+# < 2.33.0 because 2.33.0+ sets Requires-Python >= 3.10 and 2.34.0 annotates
+# _internal_utils with runtime `str | bytes` unions, which raise TypeError at
+# import on 3.9 and make every collector fail to register. splunk-sdk is capped
+# < 3.0.0 (3.0.0 is Python >= 3.13 only). splunktaucclib >= 8.2.0 is required by
+# the current ucc-gen (>= 6.5.2); the old == 8.0.0 pin broke `ucc-gen build`.
+# Matches the set proven green on TA-unifi-cloud / TA-airspace-watch.
+#
+requests>=2.32.0,<2.33.0
+splunk-sdk>=2.0.2,<3.0.0
+splunktaucclib>=8.2.0
+solnlib>=5.5.0
