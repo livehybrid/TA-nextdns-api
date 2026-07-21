@@ -58,6 +58,11 @@ jobs:
           ucc-gen build --source package --ta-version 1.1.0
           rm -rf stage && mkdir -p stage
           cp -r output/TA-nextdns-api stage/TA-nextdns-api
+          # Point the collectors at the mock upstream via the app-local override
+          # file (splunkd does not pass the container env var to modular-input
+          # processes, so the env var alone does not reach them).
+          mkdir -p stage/TA-nextdns-api/local
+          echo "http://mock:8080" > stage/TA-nextdns-api/local/nextdns_api_base
           # The test container's splunk user (a different uid) must read the app
           # and write local/inputs.conf + checkpoints into the bind mount. Wide
           # perms are fine on this throwaway copy — it is never the artefact.

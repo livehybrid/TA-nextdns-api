@@ -11,11 +11,33 @@ import requests
 ADDON_NAME = "TA-nextdns-api"
 REST_PATH = "ta_nextdns_api"
 
-# Base URL for the NextDNS API. Overridable via the NEXTDNS_API_BASE environment
-# variable so integration tests can point the collector at a local mock upstream
-# (and enterprises can route through an API gateway). Defaults to the real API,
-# so production behaviour is unchanged when the variable is unset.
-NEXTDNS_API_BASE = os.environ.get("NEXTDNS_API_BASE", "https://api.nextdns.io").rstrip("/")
+def _resolve_api_base():
+    """Base URL for the NextDNS API.
+
+    Resolution order (production is unaffected — both overrides are absent in a
+    normal install, so it falls through to the real API):
+      1. NEXTDNS_API_BASE env var (e.g. an enterprise API gateway).
+      2. a `local/nextdns_api_base` file in the app. splunkd does not reliably
+         pass environment variables to modular-input processes, so the
+         integration harness writes this file to point the collectors at a mock
+         upstream. A modular input can always read its own app files.
+      3. the real NextDNS API.
+    """
+    env = os.environ.get("NEXTDNS_API_BASE")
+    if env:
+        return env.rstrip("/")
+    override = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "local", "nextdns_api_base")
+    try:
+        with open(override) as fh:
+            val = fh.read().strip()
+        if val:
+            return val.rstrip("/")
+    except OSError:
+        pass
+    return "https://api.nextdns.io"
+
+
+NEXTDNS_API_BASE = _resolve_api_base()
 
 
 def validate_input(definition: smi.ValidationDefinition):
