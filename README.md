@@ -29,9 +29,8 @@ runtime introduced in Splunk 10.2.
 CI runs AppInspect against the `cloud`, `future` and `private_victoria` tag
 sets on every push.
 
-A Splunk-in-Docker integration harness lives in `docker/` and can be run
-locally with `docker compose up`. Because NextDNS is a keyed upstream, the
-harness ships a **mock NextDNS proxy** (`docker/proxy`) that lets the collectors
-be exercised end-to-end against real Splunk without a live API key. Wiring this
-harness into CI as a gating integration-test job (matching the sibling TA-*
-add-ons) is a planned follow-up.
+A real-Splunk integration test suite (add-on installs, both modular-input
+kinds register and expose their schemes on the Splunk 10 / Python 3.9 runtime),
+matching the pattern used by the sibling TA-* add-ons, is a planned follow-up.
+The `docker/` directory currently holds an unused scaffold (a Splunk container
+plus a standalone Squid forward-proxy image) and does not yet run any tests.
