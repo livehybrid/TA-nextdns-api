@@ -78,7 +78,10 @@ def stream_events(inputs: smi.InputDefinition, ew: smi.EventWriter):
             for line in get_data_from_api(logger, api_key, input_item.get("profile")):
                 if line.startswith("data:"):
                     data = line[6:]
-                    log.log_event(logger, {"line": data})
+                    # NB: do not log `data` here — it is the raw DNS query line
+                    # (domains/devices/timestamps). It is written to the index as
+                    # an event below; logging it as well would duplicate real
+                    # user data into the add-on log file.
                     ew.write_event(smi.Event(data=data, index=input_item.get("index"), sourcetype=sourcetype, host=input_item.get("profile")))
 
             log.modular_input_end(logger, normalized_input_name)

@@ -75,12 +75,21 @@ jobs:
           SPLUNK_CONTAINER: ta_nextdns_api_splunk
         run: pytest tests/ -v -ra
 
-      - name: Splunk logs on failure
+      - name: Diagnostics on failure
         if: failure()
         working-directory: docker
         run: |
-          docker compose logs --tail 300 splunk || true
-          docker exec ta_nextdns_api_splunk tail -n 300 /opt/splunk/var/log/splunk/splunkd.log || true
+          echo "===== did NEXTDNS_API_BASE reach splunkd's environment? ====="
+          pid=$(docker exec ta_nextdns_api_splunk bash -lc "pgrep -f 'splunkd.*-p ' | head -1") || true
+          docker exec ta_nextdns_api_splunk bash -lc "tr '\0' '\n' < /proc/${pid}/environ 2>/dev/null | grep -i nextdns" || echo "(NEXTDNS_API_BASE not in splunkd env)"
+          echo "===== inputs.conf (were the inputs created + enabled?) ====="
+          docker exec ta_nextdns_api_splunk /opt/splunk/bin/splunk btool inputs list --app=TA-nextdns-api 2>/dev/null || true
+          echo "===== collector add-on logs (which URL, any exception) ====="
+          docker exec ta_nextdns_api_splunk bash -lc 'tail -n 120 /opt/splunk/var/log/splunk/ta-nextdns-api_*.log 2>/dev/null' || echo "(no add-on logs)"
+          echo "===== mock request log (did the collectors reach the mock?) ====="
+          docker compose logs --tail 100 mock || true
+          echo "===== splunkd.log tail ====="
+          docker exec ta_nextdns_api_splunk tail -n 120 /opt/splunk/var/log/splunk/splunkd.log || true
 
       - name: Tear down
         if: always()

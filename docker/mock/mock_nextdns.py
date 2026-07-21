@@ -72,8 +72,11 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send_json({"error": "not found", "path": self.path}, status=404)
 
-    def log_message(self, fmt, *args):  # keep the container log quiet/tidy
-        pass
+    def log_message(self, fmt, *args):
+        # One concise line per request to the container log, so `docker compose
+        # logs mock` shows whether the collectors actually reached the mock
+        # (paths only — the mock never sees real data).
+        print(f"MOCK {self.command} {self.path}", flush=True)
 
 
 if __name__ == "__main__":

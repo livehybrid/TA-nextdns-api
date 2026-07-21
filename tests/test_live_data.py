@@ -55,7 +55,7 @@ def configured(splunk):
     splunk.request("DELETE", f"{NS}/ta_nextdns_api_account/{ACCOUNT}")
 
 
-def _wait_for(splunk, spl, timeout=180):
+def _wait_for(splunk, spl, timeout=90):
     deadline = time.time() + timeout
     hits = []
     while time.time() < deadline:
