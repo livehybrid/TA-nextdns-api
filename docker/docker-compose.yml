@@ -8,6 +8,13 @@ services:
       SPLUNK_GENERAL_TERMS: --accept-sgt-current-at-splunk-com
       SPLUNK_PASSWORD: ${SPLUNK_PASSWORD:-Changeme1!}
       SPLUNK_HEC_TOKEN: ""
+      # Point the collectors at the mock upstream instead of api.nextdns.io, so
+      # the keyed inputs are exercised end-to-end with no real key or DNS data.
+      # splunkd inherits this and passes it to the modular-input processes.
+      NEXTDNS_API_BASE: http://mock:8080
+    depends_on:
+      mock:
+        condition: service_healthy
     ports:
       # Fixed ports so the suite can hit https://127.0.0.1:8089 directly.
       # On a CI runner nothing else contends for these.
@@ -24,3 +31,11 @@ services:
       timeout: 5s
       retries: 40
       start_period: 30s
+
+  mock:
+    # Deterministic stand-in for api.nextdns.io — no real key, no real DNS data.
+    build: ./mock
+    container_name: ta_nextdns_api_mock
+    hostname: mock
+    expose:
+      - "8080"

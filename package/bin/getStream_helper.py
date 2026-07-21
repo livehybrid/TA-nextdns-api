@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 import import_declare_test
 
@@ -9,6 +10,12 @@ import requests
 
 ADDON_NAME = "TA-nextdns-api"
 REST_PATH = "ta_nextdns_api"
+
+# Base URL for the NextDNS API. Overridable via the NEXTDNS_API_BASE environment
+# variable so integration tests can point the collector at a local mock upstream
+# (and enterprises can route through an API gateway). Defaults to the real API,
+# so production behaviour is unchanged when the variable is unset.
+NEXTDNS_API_BASE = os.environ.get("NEXTDNS_API_BASE", "https://api.nextdns.io").rstrip("/")
 
 
 def validate_input(definition: smi.ValidationDefinition):
@@ -31,7 +38,7 @@ def get_account_api_key(session_key: str, account_name: str):
 
 def get_data_from_api(logger: logging.Logger, api_key: str, profile: str):
     logger.info("Getting data from NextDNS Streaming endpoint")
-    url = f"https://api.nextdns.io/profiles/{profile}/logs/stream"
+    url = f"{NEXTDNS_API_BASE}/profiles/{profile}/logs/stream"
     with requests.get(url, headers={"x-api-key": api_key}, stream=True) as resp:
         resp.raise_for_status()  # Ensure we raise an error for bad responses
         for line in resp.iter_lines():
