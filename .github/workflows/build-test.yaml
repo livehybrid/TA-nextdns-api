@@ -101,6 +101,62 @@ jobs:
         working-directory: docker
         run: docker compose down -v || true
 
+  live-real-api:
+    name: live-real-api (real NextDNS)
+    needs: package
+    # Real-API canary: pulls genuine data with the NEXTDNS_API_KEY secret. Runs
+    # only where the secret is available (skips on Dependabot / forks — they get
+    # no secrets). NON-gating: publish-gh does not depend on it, so real-API
+    # flakiness or drift never blocks a release.
+    if: ${{ github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install UCC framework + pytest
+        run: pip install --upgrade splunk-add-on-ucc-framework pytest
+
+      - name: Build add-on into stage/ (no mock override -> real API)
+        shell: bash
+        run: |
+          ucc-gen build --source package --ta-version 1.1.0
+          rm -rf stage && mkdir -p stage
+          cp -r output/TA-nextdns-api stage/TA-nextdns-api
+          # Deliberately NO local/nextdns_api_base override here, so the
+          # collectors hit the real api.nextdns.io.
+          chmod -R 777 stage/TA-nextdns-api
+
+      - name: Start Splunk (real API base, wait for health)
+        working-directory: docker
+        env:
+          NEXTDNS_API_BASE: https://api.nextdns.io
+        run: docker compose up -d --wait --wait-timeout 360
+
+      - name: Run real-API canary
+        env:
+          SPLUNK_MGMT_URL: https://127.0.0.1:8089
+          SPLUNK_USER: admin
+          SPLUNK_PASSWORD: Changeme1!
+          SPLUNK_CONTAINER: ta_nextdns_api_splunk
+          NEXTDNS_API_KEY: ${{ secrets.NEXTDNS_API_KEY }}
+        run: pytest tests/test_live_real.py -v -ra
+
+      - name: Collector logs on failure
+        if: failure()
+        working-directory: docker
+        run: |
+          docker exec ta_nextdns_api_splunk /opt/splunk/bin/splunk search \
+            'search index=_internal source=*ta-nextdns* (nextdns OR NextDNS) earliest=-15m | head 20 | table _time component _raw' \
+            -auth admin:Changeme1! 2>&1 | head -40 || true
+
+      - name: Tear down
+        if: always()
+        working-directory: docker
+        run: docker compose down -v || true
+
   publish-gh:
     permissions:
       contents: write
