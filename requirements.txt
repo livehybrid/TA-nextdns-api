@@ -1,1 +1,19 @@
-splunk-add-on-ucc-framework==6.1.0
+#
+# Project-level requirements for building, testing and packaging TA-nextdns-api.
+#
+# Versions are the newest that stay compatible with Splunk's Python 3.9 LTS
+# runtime (the pin target), NOT simply "latest":
+#   - splunk-sdk < 3.0.0  : 3.0.0 requires Python >= 3.13 and would not install
+#     on the 3.9 build / would break the Splunk 10 3.9 runtime.
+#   - requests   < 2.33.0 : 2.33.0+ sets Requires-Python >= 3.10 and 2.34.0 uses
+#     runtime `str | bytes` unions that raise TypeError at import on 3.9.
+#   - splunktaucclib >= 8.2.0 : floor required by the current ucc-gen (>= 6.5.2);
+#     the previous == 8.0.0 pin broke `ucc-gen build`.
+# Matches the spec proven green on TA-unifi-cloud / TA-airspace-watch / TA-uk-open-data.
+#
+splunk-add-on-ucc-framework>=6.0.0
+splunk-appinspect>=3.6.0
+requests>=2.32.0,<2.33.0
+splunk-sdk>=2.0.2,<3.0.0
+splunktaucclib>=8.2.0
+solnlib>=5.5.0

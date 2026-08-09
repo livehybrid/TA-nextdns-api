@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 import import_declare_test
 
@@ -9,6 +10,34 @@ import requests
 
 ADDON_NAME = "TA-nextdns-api"
 REST_PATH = "ta_nextdns_api"
+
+def _resolve_api_base():
+    """Base URL for the NextDNS API.
+
+    Resolution order (production is unaffected — both overrides are absent in a
+    normal install, so it falls through to the real API):
+      1. NEXTDNS_API_BASE env var (e.g. an enterprise API gateway).
+      2. a `local/nextdns_api_base` file in the app. splunkd does not reliably
+         pass environment variables to modular-input processes, so the
+         integration harness writes this file to point the collectors at a mock
+         upstream. A modular input can always read its own app files.
+      3. the real NextDNS API.
+    """
+    env = os.environ.get("NEXTDNS_API_BASE")
+    if env:
+        return env.rstrip("/")
+    override = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "local", "nextdns_api_base")
+    try:
+        with open(override) as fh:
+            val = fh.read().strip()
+        if val:
+            return val.rstrip("/")
+    except OSError:
+        pass
+    return "https://api.nextdns.io"
+
+
+NEXTDNS_API_BASE = _resolve_api_base()
 
 
 def validate_input(definition: smi.ValidationDefinition):
@@ -31,7 +60,7 @@ def get_account_api_key(session_key: str, account_name: str):
 
 def get_data_from_api(logger: logging.Logger, api_key: str, profile: str, analytic_type: str):
     logger.info("Getting data from an external API")
-    resp = requests.get(f"https://api.nextdns.io/profiles/{profile}/analytics/{analytic_type}", headers={"x-api-key": api_key})
+    resp = requests.get(f"{NEXTDNS_API_BASE}/profiles/{profile}/analytics/{analytic_type}", headers={"x-api-key": api_key})
     return resp.json()
 
 

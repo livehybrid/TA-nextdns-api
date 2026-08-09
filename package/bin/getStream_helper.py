@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 import import_declare_test
 
@@ -9,6 +10,34 @@ import requests
 
 ADDON_NAME = "TA-nextdns-api"
 REST_PATH = "ta_nextdns_api"
+
+def _resolve_api_base():
+    """Base URL for the NextDNS API.
+
+    Resolution order (production is unaffected — both overrides are absent in a
+    normal install, so it falls through to the real API):
+      1. NEXTDNS_API_BASE env var (e.g. an enterprise API gateway).
+      2. a `local/nextdns_api_base` file in the app. splunkd does not reliably
+         pass environment variables to modular-input processes, so the
+         integration harness writes this file to point the collectors at a mock
+         upstream. A modular input can always read its own app files.
+      3. the real NextDNS API.
+    """
+    env = os.environ.get("NEXTDNS_API_BASE")
+    if env:
+        return env.rstrip("/")
+    override = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "local", "nextdns_api_base")
+    try:
+        with open(override) as fh:
+            val = fh.read().strip()
+        if val:
+            return val.rstrip("/")
+    except OSError:
+        pass
+    return "https://api.nextdns.io"
+
+
+NEXTDNS_API_BASE = _resolve_api_base()
 
 
 def validate_input(definition: smi.ValidationDefinition):
@@ -31,7 +60,7 @@ def get_account_api_key(session_key: str, account_name: str):
 
 def get_data_from_api(logger: logging.Logger, api_key: str, profile: str):
     logger.info("Getting data from NextDNS Streaming endpoint")
-    url = f"https://api.nextdns.io/profiles/{profile}/logs/stream"
+    url = f"{NEXTDNS_API_BASE}/profiles/{profile}/logs/stream"
     with requests.get(url, headers={"x-api-key": api_key}, stream=True) as resp:
         resp.raise_for_status()  # Ensure we raise an error for bad responses
         for line in resp.iter_lines():
@@ -71,7 +100,10 @@ def stream_events(inputs: smi.InputDefinition, ew: smi.EventWriter):
             for line in get_data_from_api(logger, api_key, input_item.get("profile")):
                 if line.startswith("data:"):
                     data = line[6:]
-                    log.log_event(logger, {"line": data})
+                    # NB: do not log `data` here — it is the raw DNS query line
+                    # (domains/devices/timestamps). It is written to the index as
+                    # an event below; logging it as well would duplicate real
+                    # user data into the add-on log file.
                     ew.write_event(smi.Event(data=data, index=input_item.get("index"), sourcetype=sourcetype, host=input_item.get("profile")))
 
             log.modular_input_end(logger, normalized_input_name)

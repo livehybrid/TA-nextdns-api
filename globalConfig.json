@@ -411,6 +411,9 @@
         "version": "1.1.0+a28cb7f",
         "displayName": "NextDNS API Collector for Splunk",
         "schemaVersion": "0.0.9",
+        "supportedPythonVersion": [
+            "3.9"
+        ],
         "supportedThemes": [
             "light",
             "dark"
