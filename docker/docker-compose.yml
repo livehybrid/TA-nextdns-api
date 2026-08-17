@@ -1,0 +1,43 @@
+services:
+  splunk:
+    image: splunk/splunk:10.0
+    container_name: ta_nextdns_api_splunk
+    hostname: splunk
+    environment:
+      SPLUNK_START_ARGS: --accept-license
+      SPLUNK_GENERAL_TERMS: --accept-sgt-current-at-splunk-com
+      SPLUNK_PASSWORD: ${SPLUNK_PASSWORD:-Changeme1!}
+      SPLUNK_HEC_TOKEN: ""
+      # Base URL the collectors use. Defaults to the mock upstream (no real key
+      # or DNS data); the real-API canary job overrides it to api.nextdns.io.
+      # NB: splunkd does not pass this to modular-input processes, so the mock
+      # path also relies on the app-local override file written in the build
+      # step. This env is belt-and-braces (and covers the REST handlers).
+      NEXTDNS_API_BASE: ${NEXTDNS_API_BASE:-http://mock:8080}
+    depends_on:
+      mock:
+        condition: service_healthy
+    ports:
+      # Fixed ports so the suite can hit https://127.0.0.1:8089 directly.
+      # On a CI runner nothing else contends for these.
+      - "8000:8000"
+      - "8089:8089"
+    volumes:
+      # The built add-on is bind-mounted live from ../stage so a rebuild on the
+      # host updates the running container. The stage/ copy is a throwaway test
+      # build (widened perms), never the packaged artefact.
+      - ../stage/TA-nextdns-api:/opt/splunk/etc/apps/TA-nextdns-api
+    healthcheck:
+      test: ["CMD", "curl", "-fsk", "https://localhost:8089/services/server/info", "-u", "admin:${SPLUNK_PASSWORD:-Changeme1!}"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+
+  mock:
+    # Deterministic stand-in for api.nextdns.io — no real key, no real DNS data.
+    build: ./mock
+    container_name: ta_nextdns_api_mock
+    hostname: mock
+    expose:
+      - "8080"
