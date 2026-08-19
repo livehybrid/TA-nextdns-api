@@ -11,7 +11,7 @@
 # the current ucc-gen (>= 6.5.2); the old == 8.0.0 pin broke `ucc-gen build`.
 # Matches the set proven green on TA-unifi-cloud / TA-airspace-watch.
 #
-requests>=2.32.0,<2.33.0
+requests>=2.32.5,<2.33.0
 splunk-sdk>=2.0.2,<3.0.0
 splunktaucclib>=8.2.0
 solnlib>=5.5.0
