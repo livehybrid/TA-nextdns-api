@@ -5,12 +5,20 @@ on:
       - "**"
     tags:
       - "v*.*.*"
+  workflow_dispatch: {}
+  schedule:
+    # Weekly real-API canary — catches upstream NextDNS drift without
+    # burning Actions minutes on every push.
+    - cron: "17 6 * * 1"
 permissions:
   pull-requests: write
   actions: write
   checks: write
 jobs:
   package:
+    # On the weekly schedule only the real-API canary runs (it builds the app
+    # itself); skipping package here makes every dependent job skip too.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Package app
@@ -103,12 +111,18 @@ jobs:
 
   live-real-api:
     name: live-real-api (real NextDNS)
-    needs: package
-    # Real-API canary: pulls genuine data with the NEXTDNS_API_KEY secret. Runs
-    # only where the secret is available (skips on Dependabot / forks — they get
-    # no secrets). NON-gating: publish-gh does not depend on it, so real-API
-    # flakiness or drift never blocks a release.
-    if: ${{ github.actor != 'dependabot[bot]' }}
+    # Real-API canary: pulls genuine data with the API key fetched from
+    # 1Password at runtime (OP_SERVICE_ACCOUNT_TOKEN). NON-gating: publish-gh
+    # does not depend on it, so real-API flakiness or drift never blocks a
+    # release. To conserve Actions minutes it runs only on the weekly
+    # schedule, manual dispatch, main pushes and release tags — not on every
+    # branch push.
+    if: >-
+      ${{ github.actor != 'dependabot[bot]' &&
+          (github.event_name == 'schedule' ||
+           github.event_name == 'workflow_dispatch' ||
+           github.ref == 'refs/heads/main' ||
+           startsWith(github.ref, 'refs/tags/')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -135,13 +149,29 @@ jobs:
           NEXTDNS_API_BASE: https://api.nextdns.io
         run: docker compose up -d --wait --wait-timeout 360
 
+      - name: Load NEXTDNS_API_KEY from 1Password
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$OP_SERVICE_ACCOUNT_TOKEN" ]; then
+            echo "OP_SERVICE_ACCOUNT_TOKEN unavailable — canary will skip." >&2
+            exit 0
+          fi
+          curl -sSfL https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_linux_amd64_v2.30.0.zip -o /tmp/op.zip
+          (cd /tmp && unzip -oq op.zip op && sudo mv op /usr/local/bin/op)
+          KEY=$(op read "op://cicd/my.nextdns.io/password")
+          if [ -z "$KEY" ]; then echo "empty key from op" >&2; exit 1; fi
+          # op-loaded values are NOT auto-masked — mask before exporting.
+          echo "::add-mask::$KEY"
+          echo "NEXTDNS_API_KEY=$KEY" >> "$GITHUB_ENV"
+
       - name: Run real-API canary
         env:
           SPLUNK_MGMT_URL: https://127.0.0.1:8089
           SPLUNK_USER: admin
           SPLUNK_PASSWORD: Changeme1!
           SPLUNK_CONTAINER: ta_nextdns_api_splunk
-          NEXTDNS_API_KEY: ${{ secrets.NEXTDNS_API_KEY }}
         run: pytest tests/test_live_real.py -v -ra
 
       - name: Collector logs on failure
