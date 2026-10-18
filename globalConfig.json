@@ -412,7 +412,7 @@
         "displayName": "NextDNS API Collector for Splunk",
         "schemaVersion": "0.0.9",
         "supportedPythonVersion": [
-            "3.9"
+            "3.13"
         ],
         "supportedThemes": [
             "light",
