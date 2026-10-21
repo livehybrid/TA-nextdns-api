@@ -19,7 +19,9 @@ jobs:
     # On the weekly schedule only the real-API canary runs (it builds the app
     # itself); skipping package here makes every dependent job skip too.
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    # ubuntu-24.04 because ubuntu-latest (26.04) has no Python 3.9, which the
+    # add-on build and Splunk 10.1-and-earlier parity need.
+    runs-on: ubuntu-24.04
     steps:
       - name: Package app
         uses: livehybrid/deploy-splunk-app-action@main
@@ -50,7 +52,7 @@ jobs:
     # Dependabot actors get no egress/secrets, so a live-data E2E can only fail
     # for them. CLI AppInspect still covers Dependabot PRs.
     if: github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -131,7 +133,7 @@ jobs:
            github.event_name == 'workflow_dispatch' ||
            github.ref == 'refs/heads/main' ||
            startsWith(github.ref, 'refs/tags/')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
