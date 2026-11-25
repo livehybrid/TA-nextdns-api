@@ -270,6 +270,13 @@ def test_profile_dropdown_lists_the_accounts_profiles(splunk, inputs):
     assert entries["mockprofile"] == "m_good - Mock Profile (mockprofile)"
 
 
+def test_profile_dropdown_logs_no_profile_names(splunk, inputs):
+    splunk.get_json(f"{NS}/ta_nextdns_api_select_profile", account="m_good")
+    assert container_grep_count(CONTAINER, "profile list returned count=") > 0  # positive control
+    assert container_grep_count(CONTAINER, "Quiet Profile") == 0
+    assert container_grep_count(CONTAINER, "fp0000000002") == 0
+
+
 def test_profile_dropdown_reports_a_bad_key(splunk, inputs):
     st, body = splunk.request("GET", f"{NS}/ta_nextdns_api_select_profile", params={"account": "m_bad", "output_mode": "json"})
     assert st >= 400

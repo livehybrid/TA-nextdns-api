@@ -160,10 +160,9 @@ class Client:
             seen.add(cursor)
 
     def profiles(self):
-        rows = []
-        for page in self.pages("/profiles", {}, 100):
-            rows.extend(page)
-        return rows
+        # /profiles is not paginated and answers 400 `extraneous` to `limit`
+        data = self.get("/profiles").get("data")
+        return data if isinstance(data, list) else []
 
     def analytics(self, profile, analytic_type, start_ms, end_ms):
         """Every row of one analytics type for [start_ms, end_ms).

@@ -204,6 +204,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("X-Api-Key", "") == BAD_KEY or not self.headers.get("X-Api-Key"):
             return self._error(path, query, 403, "authRequired")
         if path.rstrip("/") == "/profiles":
+            for extra in query:  # as the real API: no pagination parameters here
+                return self._error(path, query, 400, "extraneous", extra)
             self._record(path, query, 200)
             return self._send({"data": PROFILES})
 

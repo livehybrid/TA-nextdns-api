@@ -190,12 +190,8 @@ def test_runs_complete_and_checkpoints_advance(splunk, live, name):
 
 
 def _indexed_logs(splunk, name):
-    rows = splunk.search(f"index=main {source(name)} | fields _raw, _time", earliest="-3h", count=0)
-    out = []
-    for r in rows:
-        body = json.loads(r["_raw"])
-        out.append((body, float(r["_time"])))
-    return out
+    rows = splunk.search(f"index=main {source(name)} | fields _raw", earliest="-3h", count=0)
+    return [(json.loads(r["_raw"]), None) for r in rows]
 
 
 @pytest.mark.parametrize("name,raw", [("l_logs_raw", True), ("l_logs", False)])
