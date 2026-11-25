@@ -263,25 +263,32 @@ def test_stats_windows_match_the_api(splunk, live):
     checked = 0
     mismatches = []
     near = []
-    for start, end in (windows[0], windows[1], windows[-1]):
-        for t in STATS_FIELDS:
+    detail = []
+    for wi, (start, end) in ((0, windows[0]), (1, windows[1]), (len(windows) - 1, windows[-1])):
+        for t, fields in STATS_FIELDS.items():
+            ident = sorted(fields - {"queries", "name"})[0] if t != "reasons" else "id"
             want = api_all(f"/profiles/{live}/analytics/{t}", 500, **{"from": ms(start), "to": ms(end)})
+            distinct = {json.dumps(x.get(ident), sort_keys=True) for x in want}
             r = by.get((t, start))
             got_n = int(r["count"]) if r else 0
             got_q = int(float(r["q"])) if r else 0
-            want_n, want_q = len(want), sum(x.get("queries", 0) for x in want)
+            want_q = sum(x.get("queries", 0) for x in want)
             checked += 1
-            if (got_n, got_q) == (want_n, want_q):
+            if got_n == len(distinct) == len(want) and got_q == want_q:
                 continue
-            # More than one page: rows tied on `queries` move between pages
-            # upstream, so either side can hold a repeat or miss a row.
-            if want_n > 500 and abs(got_n - want_n) <= want_n // 100 and abs(got_q - want_q) <= want_q // 100:
+            # Several pages: rows tied on `queries` move between pages
+            # upstream, so a row can be repeated (the add-on drops repeats) or
+            # skipped on either side.
+            pages = -(-len(want) // 500)
+            detail.append({"type": t, "window": wi, "pages": pages, "indexed": got_n, "api_rows": len(want),
+                           "api_distinct": len(distinct), "indexed_queries": got_q, "api_queries": want_q})
+            if pages > 1 and abs(got_n - len(distinct)) <= len(distinct) // 100 and abs(got_q - want_q) <= want_q // 100:
                 near.append(t)
             else:
                 mismatches.append(t)
     SUMMARY["stats"] = {
         "windows": len(windows), "events": sum(int(r["count"]) for r in rows), "types_first_window": len(first_types),
-        "checked": checked, "mismatched_types": sorted(set(mismatches)), "multi_page_near_matches": sorted(set(near)),
+        "checked": checked, "mismatched_types": sorted(set(mismatches)), "multi_page_near_matches": sorted(set(near)), "differences": detail,
     }
     assert not mismatches
 
