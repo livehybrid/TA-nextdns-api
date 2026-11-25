@@ -37,6 +37,8 @@ ANALYTICS_PAGE = 40
 def server():
     mock.LOGS_PAGE = LOGS_PAGE
     mock.ANALYTICS_PAGE = ANALYTICS_PAGE
+    mock.CURSOR_LOSS = True  # the real faults, see mock_nextdns.py
+    mock.ANALYTICS_OVERLAP = True
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mock.Handler)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
@@ -82,18 +84,58 @@ def test_logs_every_query_once_across_many_pages(server, requests_seen, raw):
     want = expected_seqs(start, end, raw)
     got = [r["mock_seq"] for r in rows]
     assert got == want  # complete, oldest first, no duplicates
-    pages = [r for r in requests_seen() if r["path"].endswith("/logs")]
-    assert len(pages) > 10
-    assert all(r["query"].get("sort") == "asc" for r in pages)
+    reqs = [r for r in requests_seen() if r["path"].endswith("/logs")]
+    assert len(reqs) > 2 * len(want) // LOGS_PAGE  # the window was split, many times
 
 
-def test_logs_stop_on_the_empty_page_asc_never_nulls_the_cursor(server, requests_seen):
+def test_logs_never_use_the_lossy_cursor(server, requests_seen):
     start, end = window()
     client(server).logs("mockprofile", start, end)
-    pages = [r for r in requests_seen() if r["path"].endswith("/logs")]
-    n = len(expected_seqs(start, end, False))
-    # every full or partial page, then exactly one empty page
-    assert len(pages) == math.ceil(n / LOGS_PAGE) + 1
+    reqs = requests_seen()
+    assert reqs and not any("cursor" in r["query"] for r in reqs)
+
+
+def test_pager_stops_on_the_empty_asc_page(server, requests_seen):
+    # sort=asc never answers a null cursor; the empty page ends the walk
+    start, end = window(20, 10)
+    c = client(server)
+    pages = list(c.pages("/profiles/mockprofile/logs", {"from": start, "to": end, "sort": "asc", "raw": 1}, 1000))
+    n = len(expected_seqs(start, end, True))
+    assert len(requests_seen()) == math.ceil(n / LOGS_PAGE) + 1
+    assert sum(len(p) for p in pages) < n  # and that is why logs() does not use it
+
+
+class _DenseSession:
+    """Every range answers a full page and a cursor until the cursor walk."""
+
+    def __init__(self):
+        self.params = []
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        self.params.append(dict(params))
+        cursor = params.get("cursor")
+        lo = int(params["from"])
+        if int(params["to"]) - lo > 1 or cursor is None:
+            body = {"data": [{"t": lo, "i": i} for i in range(1000)], "meta": {"pagination": {"cursor": "next"}}}
+        else:
+            body = {"data": [{"t": lo, "i": 1000 + i} for i in range(5)], "meta": {"pagination": {"cursor": None}}}
+
+        class R:
+            status_code = 200
+            headers = {}
+
+            def json(self_inner):
+                return body
+
+        return R()
+
+
+def test_logs_fall_back_to_the_cursor_for_a_single_crowded_millisecond():
+    s = _DenseSession()
+    rows = nd.Client("k", base="http://unused", session=s).logs("p", 1000, 1004)
+    # 4 one-millisecond leaves, each 1000 rows plus 5 from the cursor walk
+    assert len(rows) == 4 * 1005
+    assert [r["t"] for r in rows] == sorted(r["t"] for r in rows)
 
 
 def test_logs_send_limits_the_api_accepts(server, requests_seen):
@@ -123,7 +165,8 @@ def test_consecutive_windows_neither_overlap_nor_gap(server):
 def test_empty_window(server, requests_seen):
     start, end = window()
     assert client(server).logs("quietprofile", start, end) == []
-    assert len(requests_seen()) == 1
+    assert client(server).analytics("quietprofile", "domains", start, end) == []
+    assert len(requests_seen()) == 2
 
 
 # -------------------------------------------------------- analytics ----
@@ -140,7 +183,14 @@ def test_analytics_follow_the_cursor_to_null(server, requests_seen):
     assert sum(r["queries"] for r in rows) == len(ks)
     pages = requests_seen()
     assert len(pages) == math.ceil(len(want_domains) / ANALYTICS_PAGE)
+    assert client_dups(server, start, end) == len(pages) - 1  # one repeat per later page, dropped
     assert all(1 <= int(r["query"]["limit"]) <= 500 for r in pages)
+
+
+def client_dups(server, start, end):
+    c = client(server)
+    c.analytics("mockprofile", "domains", start, end)
+    return c.duplicates_dropped
 
 
 def test_analytics_status_counts_the_window(server):
@@ -216,7 +266,7 @@ class _LoopSession:
 def test_a_repeated_cursor_with_rows_is_an_error_not_a_hang():
     s = _LoopSession()
     with pytest.raises(nd.NextDNSError) as exc:
-        nd.Client("k", base="http://unused", session=s).logs("p", 0, 1000)
+        nd.Client("k", base="http://unused", session=s).analytics("p", "domains", 0, 1000)
     assert exc.value.codes == ["pagination_loop"]
     assert s.calls == 2
 

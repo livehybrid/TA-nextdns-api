@@ -122,10 +122,13 @@ def test_logs_later_windows_start_at_the_checkpoint(splunk, inputs):
     assert all(w < 120 for _, w in done[1:]), [w for _, w in done]
 
 
-def test_logs_many_pages_were_read(splunk, inputs):
+def test_logs_large_windows_were_split_not_paged(splunk, inputs):
+    # The mock drops a row per cursor page, as the real API does on tied
+    # timestamps, so only the split route can pass the completeness tests.
+    assert mock_get("/__mock/info")["cursor_loss"]
     reqs = [r for r in mock_get("/__mock/requests")["data"] if r["path"] == "/profiles/mockprofile/logs"]
-    assert len(reqs) >= 12  # the first hour alone is 12+ pages of 300
-    assert all(r["query"].get("sort") == "asc" for r in reqs)
+    assert len(reqs) >= 15  # the first hour alone does not fit in pages of 300
+    assert not any("cursor" in r["query"] for r in reqs)
     assert all(10 <= int(r["query"]["limit"]) <= 1000 for r in reqs)
 
 

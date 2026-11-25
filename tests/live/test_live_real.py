@@ -103,6 +103,30 @@ def api_all(path, limit, **params):
     raise AssertionError("API pagination did not end")
 
 
+def api_logs(profile, lo, hi, raw):
+    """Every log in [lo, hi) on a fixed one-minute grid, each minute one page.
+
+    Not the cursor: it loses rows that share a timestamp across a page.
+    A minute that does not fit is read in ten-second pieces.
+    """
+    out = []
+    for a in range(lo, hi, 60000):
+        pieces = [(a, min(a + 60000, hi))]
+        while pieces:
+            x, y = pieces.pop(0)
+            params = {"from": x, "to": y, "sort": "desc", "limit": 1000}
+            if raw:
+                params["raw"] = 1
+            body = api(f"/profiles/{profile}/logs", **params)
+            if body["meta"]["pagination"].get("cursor") and y - x > 1000:
+                step = max(1000, (y - x) // 6)
+                pieces = [(z, min(z + step, y)) for z in range(x, y, step)] + pieces
+                continue
+            assert not body["meta"]["pagination"].get("cursor"), "a second does not fit one page"
+            out += body.get("data") or []
+    return out
+
+
 def ms(iso):
     main, _, frac = iso.rstrip("Z").partition(".")
     return calendar.timegm(time.strptime(main, "%Y-%m-%dT%H:%M:%S")) * 1000 + int((frac + "000")[:3])
@@ -181,10 +205,7 @@ def test_logs_match_the_api(splunk, live, name, raw):
     got = collections.Counter(fingerprint(b) for b, _ in indexed)
     stamps = [ms(b["timestamp"]) for b, _ in indexed]
     lo, hi = min(stamps), max(stamps) + 1
-    params = {"from": lo, "to": hi, "sort": "desc"}
-    if raw:
-        params["raw"] = 1
-    want = collections.Counter(fingerprint(r) for r in api_all(f"/profiles/{live}/logs", 500, **params))
+    want = collections.Counter(fingerprint(r) for r in api_logs(live, lo, hi, raw))
     dups = sum(c - 1 for c in got.values() if c > 1)
     missing = sum((want - got).values())
     extra = sum((got - want).values())
@@ -195,10 +216,13 @@ def test_logs_match_the_api(splunk, live, name, raw):
     }
     assert dups == 0
     assert (hi - lo) >= (LOOKBACK_S - 120) * 1000
-    # raw is the complete log; the default view is de-duplicated per request
-    # by NextDNS, so a different split into pages and windows differs a little.
-    tolerance = max(3, n // 500) if raw else max(10, n // 20)
-    assert missing <= tolerance and extra <= tolerance
+    if raw:
+        # the complete log: row for row
+        assert missing == 0 and extra == 0
+    else:
+        # de-duplicated per request upstream, so another split of the same
+        # range picks other representatives: compare the counts only
+        assert abs(sum(got.values()) - n) <= max(10, n // 10)
 
 
 def test_logs_fields_time_and_indexed_fields(splunk, live):
@@ -242,18 +266,26 @@ def test_stats_windows_match_the_api(splunk, live):
     assert set(ALWAYS) <= first_types
     checked = 0
     mismatches = []
-    for start, end in (windows[0], windows[-1]):
+    near = []
+    for start, end in (windows[0], windows[1], windows[-1]):
         for t in STATS_FIELDS:
-            want = api_all(f"/profiles/{live}/analytics/{t}", 100, **{"from": ms(start), "to": ms(end)})
+            want = api_all(f"/profiles/{live}/analytics/{t}", 500, **{"from": ms(start), "to": ms(end)})
             r = by.get((t, start))
             got_n = int(r["count"]) if r else 0
             got_q = int(float(r["q"])) if r else 0
-            if (got_n, got_q) != (len(want), sum(x.get("queries", 0) for x in want)):
-                mismatches.append(t)
+            want_n, want_q = len(want), sum(x.get("queries", 0) for x in want)
             checked += 1
+            if (got_n, got_q) == (want_n, want_q):
+                continue
+            # More than one page: rows tied on `queries` move between pages
+            # upstream, so either side can hold a repeat or miss a row.
+            if want_n > 500 and abs(got_n - want_n) <= want_n // 100 and abs(got_q - want_q) <= want_q // 100:
+                near.append(t)
+            else:
+                mismatches.append(t)
     SUMMARY["stats"] = {
         "windows": len(windows), "events": sum(int(r["count"]) for r in rows), "types_first_window": len(first_types),
-        "checked": checked, "mismatched_types": sorted(set(mismatches)),
+        "checked": checked, "mismatched_types": sorted(set(mismatches)), "multi_page_near_matches": sorted(set(near)),
     }
     assert not mismatches
 

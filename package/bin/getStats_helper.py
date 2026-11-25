@@ -81,8 +81,8 @@ def stream_events(inputs: smi.InputDefinition, ew: smi.EventWriter):
                     written += 1
             checkpoint.save(end)
             logger.info(
-                "input=%s run complete events=%d types=%d requests=%d window_seconds=%d",
-                name, written, len(types), client.requests_made, (end - start) // 1000,
+                "input=%s run complete events=%d types=%d requests=%d duplicates_dropped=%d window_seconds=%d",
+                name, written, len(types), client.requests_made, client.duplicates_dropped, (end - start) // 1000,
             )
         except nd.NextDNSError as exc:
             logger.error("input=%s run failed: %s", name, exc)

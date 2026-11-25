@@ -97,6 +97,7 @@ class Client:
         self.max_retries = max_retries
         self.sleep = sleep
         self.requests_made = 0
+        self.duplicates_dropped = 0
         self._headers = {"X-Api-Key": api_key, "User-Agent": USER_AGENT, "Accept": "application/json"}
 
     def get(self, path, params=None):
@@ -165,27 +166,58 @@ class Client:
         return rows
 
     def analytics(self, profile, analytic_type, start_ms, end_ms):
+        """Every row of one analytics type for [start_ms, end_ms).
+
+        Rows tied on `queries` are not in a stable order upstream, so a row
+        can appear on two pages and another on neither (checked live: 85
+        repeats across 58 pages of 20). Pages of 500, the maximum, keep page
+        boundaries rare; a repeated row is dropped so it is not counted twice.
+        """
         path = "/profiles/{}/analytics/{}".format(_quote(profile), _quote(analytic_type))
-        rows = []
+        key = ANALYTIC_KEYS.get(analytic_type)
+        rows, seen = [], set()
         for page in self.pages(path, {"from": start_ms, "to": end_ms}, ANALYTICS_PAGE):
-            rows.extend(page)
+            for row in page:
+                ident = json.dumps(row.get(key) if key else row, sort_keys=True, default=str)
+                if ident in seen:
+                    self.duplicates_dropped += 1
+                    continue
+                seen.add(ident)
+                rows.append(row)
         return rows
 
     def logs(self, profile, start_ms, end_ms, raw=False):
         """Every log in [start_ms, end_ms), oldest first.
 
+        The log's cursor loses rows that share a timestamp across a page
+        boundary (checked live: 24 of 15,000 rows lost in pages of 100, 1106
+        timestamps shared by two or more rows). So no cursor is used: a range
+        that does not fit one page (`sort=desc` answers a null cursor when it
+        does) is halved until each part fits, and the parts are read in order.
+
         raw=False is the API default: A, AAAA and HTTPS queries only, with
         repeats and background noise removed. That de-duplication is done per
-        request, so the rows returned for a range depend slightly on how it is
-        split into windows and pages. raw=True returns every query.
+        request, so the rows for a range depend a little on how it is split.
+        raw=True returns every query.
         """
         path = "/profiles/{}/logs".format(_quote(profile))
-        params = {"from": start_ms, "to": end_ms, "sort": "asc"}
-        if raw:
-            params["raw"] = 1
+        extra = {"raw": 1} if raw else {}
         rows = []
-        for page in self.pages(path, params, LOGS_PAGE):
-            rows.extend(page)
+        todo = [(start_ms, end_ms)]
+        while todo:
+            lo, hi = todo.pop()
+            body = self.get(path, dict(extra, **{"from": lo, "to": hi, "sort": "desc", "limit": LOGS_PAGE}))
+            data = body.get("data") if isinstance(body.get("data"), list) else []
+            more = ((body.get("meta") or {}).get("pagination") or {}).get("cursor")
+            if more and data and hi - lo > 1:
+                mid = (lo + hi) // 2
+                todo.append((mid, hi))  # popped after (lo, mid): oldest first
+                todo.append((lo, mid))
+                continue
+            if more and data:
+                # one millisecond holds more than a page: only the cursor is left
+                data = [r for page in self.pages(path, dict(extra, **{"from": lo, "to": hi, "sort": "desc"}), LOGS_PAGE) for r in page]
+            rows.extend(reversed(data))
         return rows
 
 
@@ -207,6 +239,21 @@ ANALYTIC_TYPES = (
     "dnssec",
     "encryption",
 )
+
+
+# The field that identifies a row of each analytics type.
+ANALYTIC_KEYS = {
+    "status": "status",
+    "protocols": "protocol",
+    "devices": "id",
+    "ips": "ip",
+    "reasons": "id",
+    "domains": "domain",
+    "queryTypes": "type",
+    "ipVersions": "version",
+    "dnssec": "validated",
+    "encryption": "encrypted",
+}
 
 
 def selected_types(sections):

@@ -43,6 +43,9 @@ services:
       # Small pages so an hour of synthetic data spans many pages.
       MOCK_LOGS_PAGE: "300"
       MOCK_ANALYTICS_PAGE: "100"
+      # Reproduce the real API's pagination faults (see mock_nextdns.py).
+      MOCK_CURSOR_LOSS: "1"
+      MOCK_ANALYTICS_OVERLAP: "1"
     expose:
       - "8080"
     ports:

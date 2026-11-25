@@ -13,6 +13,12 @@ Pagination follows the real API (checked live 25 Nov 2026):
 The harness clamps pages further (MOCK_LOGS_PAGE, MOCK_ANALYTICS_PAGE) so an
 hour of data spans many pages; the real API returns exactly `limit` rows.
 
+Two real pagination faults are reproduced (both seen live, 25 Nov 2026):
+  * MOCK_CURSOR_LOSS=1: a logs page fetched with a cursor loses its first row
+    (upstream drops rows sharing a timestamp across a page boundary).
+  * MOCK_ANALYTICS_OVERLAP=1: each analytics page after the first repeats the
+    previous page's last row (rows tied on `queries` move between pages).
+
 Data is a pure function of time, so a test can compute what any window holds:
 the "mockprofile" profile logs one query every STEP_MS, sequence number
 k = timestamp_ms // STEP_MS. raw=1 returns every k; the default (de-duplicated)
@@ -41,6 +47,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 STEP_MS = int(os.environ.get("MOCK_STEP_MS", "1000"))
 LOGS_PAGE = int(os.environ.get("MOCK_LOGS_PAGE", "1000"))
 ANALYTICS_PAGE = int(os.environ.get("MOCK_ANALYTICS_PAGE", "500"))
+CURSOR_LOSS = os.environ.get("MOCK_CURSOR_LOSS", "0") == "1"
+ANALYTICS_OVERLAP = os.environ.get("MOCK_ANALYTICS_OVERLAP", "0") == "1"
 DOMAINS = 1200
 IPS = 250
 BAD_KEY = "mock-bad-key"
@@ -188,7 +196,8 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 return self._send({"data": list(REQUESTS)})
         if path == "/__mock/info":
-            return self._send({"step_ms": STEP_MS, "logs_page": LOGS_PAGE, "analytics_page": ANALYTICS_PAGE, "domains": DOMAINS})
+            return self._send({"step_ms": STEP_MS, "logs_page": LOGS_PAGE, "analytics_page": ANALYTICS_PAGE, "domains": DOMAINS,
+                               "cursor_loss": CURSOR_LOSS, "analytics_overlap": ANALYTICS_OVERLAP})
         if path == "/__mock/health":
             return self._send({"ok": True})
 
@@ -250,10 +259,15 @@ class Handler(BaseHTTPRequestHandler):
             size = min(limit, ANALYTICS_PAGE)
             sort = "desc"
 
-        page = rows[offset:offset + size]
+        served = rows[offset:offset + size]
+        page = served
+        if kind == "logs" and CURSOR_LOSS and offset > 0:
+            page = served[1:]
+        if kind != "logs" and ANALYTICS_OVERLAP and offset > 0:
+            page = [rows[offset - 1]] + served
         if kind == "logs" and sort == "asc":
             # Never null: past the end, the same cursor comes back on an empty page.
-            cursor = cursor_for(offset + len(page)) if page else (query.get("cursor") or cursor_for(offset))
+            cursor = cursor_for(offset + len(served)) if served else (query.get("cursor") or cursor_for(offset))
         else:
             cursor = cursor_for(offset + size) if offset + size < len(rows) else None
         self._record(path, query, 200)
