@@ -44,3 +44,6 @@ src/*/local/*
 depsprivate/*
 
 package/local
+
+# Python bytecode (AppInspect fails on compiled files)
+__pycache__/

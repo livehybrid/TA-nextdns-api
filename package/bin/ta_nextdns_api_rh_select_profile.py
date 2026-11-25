@@ -1,51 +1,44 @@
-import import_declare_test
+"""REST handler behind the inputs' Profile dropdown: lists the account's profiles.
+
+Uses the same API base as the inputs (so a gateway override or the test mock
+applies here too). Logs counts and error codes only: never the key, the
+profile list or a profile name.
+"""
+import import_declare_test  # noqa: F401
+
 import splunk.admin as admin
-import splunk.clilib.cli_common as scc
-import logging
 
-from splunktaucclib.splunk_aoblib.setup_util import Setup_Util
-from nextdns_modinput import NextDNSModInput
+import nextdns_client as nd
+from nextdns_input_common import get_account_api_key, logger_for_input
 
-logger = logging.getLogger()
-
-import splunktaucclib.common.log as stulog
-
-APPNAME = "TA-nextdns-api"
+logger = logger_for_input("select_profile")
 FIELDS = ["account"]
 
 
-class NextDNSProfileSelect(admin.MConfigHandler):
+def profile_label(account, profile):
+    return "{} - {} ({})".format(account, profile.get("name", ""), profile.get("id", ""))
 
+
+class NextDNSProfileSelect(admin.MConfigHandler):
     def setup(self):
-        stulog.logger.error("SETUP")
         for arg in FIELDS:
             self.supportedArgs.addOptArg(arg)
 
-    @staticmethod
-    def validate_params(must_params, opt_params, **params):
-        pass
-
     def handleList(self, confInfo):
         if not self.callerArgs or not self.callerArgs.get("account"):
-            logger.error("Missing NextDNS credentials")
-            raise Exception("Missing NextDNS credentials")
-        nextdns_account = self.callerArgs["account"][0]
-
-        api_helper = NextDNSModInput(app_namespace=APPNAME, input_name="NextDNS_API_Stats")
-        api_helper.log_warning(nextdns_account)
-        api_helper.session_key = self.getSessionKey()
-        api_helper.splunk_uri = scc.getMgmtUri()
-        api_helper.setup_util = Setup_Util(api_helper.splunk_uri, api_helper.session_key)
-
-        url = "https://api.nextdns.io/profiles"
-        response = api_helper.get_api(url, nextdns_account)
-        response_json = response.json()
-        api_helper.log_warning(response_json)
-        for profile in response_json["data"]:
-            api_helper.log_warning(profile["id"])
-            confInfo[profile["id"]]["profile"] = f"{nextdns_account} - {profile['name']} ({profile['id']})"
-            api_helper.log_warning(confInfo)
-        return
+            raise admin.ArgValidationException("Select an account first")
+        account = self.callerArgs["account"][0]
+        try:
+            api_key = get_account_api_key(self.getSessionKey(), account)
+            profiles = nd.Client(api_key).profiles()
+        except nd.NextDNSError as exc:
+            logger.error("profile list failed: %s", exc)
+            raise admin.InternalException("NextDNS API: {}".format(exc))
+        for profile in profiles:
+            pid = profile.get("id")
+            if pid:
+                confInfo[pid]["profile"] = profile_label(account, profile)
+        logger.info("profile list returned count=%d", len(profiles))
 
 
 if __name__ == "__main__":

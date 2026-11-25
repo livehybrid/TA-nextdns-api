@@ -39,5 +39,15 @@ services:
     build: ./mock
     container_name: ta_nextdns_api_mock
     hostname: mock
+    environment:
+      # Small pages so an hour of synthetic data spans many pages.
+      MOCK_LOGS_PAGE: "300"
+      MOCK_ANALYTICS_PAGE: "100"
+      # Reproduce the real API's pagination faults (see mock_nextdns.py).
+      MOCK_CURSOR_LOSS: "1"
+      MOCK_ANALYTICS_OVERLAP: "1"
     expose:
       - "8080"
+    ports:
+      # The tests read /__mock/requests and /__mock/info from the runner.
+      - "127.0.0.1:8080:8080"

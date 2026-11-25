@@ -1,119 +1,92 @@
+"""NextDNS_API_Stats: analytics for consecutive time windows.
+
+Each run collects the analytics for the window since the previous run (from
+the checkpoint) up to LAG_MS before now, every page of every selected type, and
+writes one event per row with `window_start` / `window_end` added (ISO 8601,
+UTC, end exclusive) and the event time at the window start. Windows never
+overlap, so `sum(queries)` over any time range counts each query once.
+
+The checkpoint advances only after every selected type was fetched, so a
+failed run writes nothing and the next run retries the same window (larger).
+"""
 import json
-import logging
-import os
 
-import import_declare_test
+import import_declare_test  # noqa: F401
 
-from solnlib import conf_manager, log
 from splunklib import modularinput as smi
-import requests
 
-ADDON_NAME = "TA-nextdns-api"
-REST_PATH = "ta_nextdns_api"
+import nextdns_client as nd
+from nextdns_input_common import (
+    LAG_MS,
+    LOOKBACK_MS,
+    MAX_WINDOW_MS,
+    get_account_api_key,
+    logger_for_input,
+    now_ms,
+    setup_logger,
+)
+from solnlib import log
 
-def _resolve_api_base():
-    """Base URL for the NextDNS API.
-
-    Resolution order (production is unaffected — both overrides are absent in a
-    normal install, so it falls through to the real API):
-      1. NEXTDNS_API_BASE env var (e.g. an enterprise API gateway).
-      2. a `local/nextdns_api_base` file in the app. splunkd does not reliably
-         pass environment variables to modular-input processes, so the
-         integration harness writes this file to point the collectors at a mock
-         upstream. A modular input can always read its own app files.
-      3. the real NextDNS API.
-    """
-    env = os.environ.get("NEXTDNS_API_BASE")
-    if env:
-        return env.rstrip("/")
-    override = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "local", "nextdns_api_base")
-    try:
-        with open(override) as fh:
-            val = fh.read().strip()
-        if val:
-            return val.rstrip("/")
-    except OSError:
-        pass
-    return "https://api.nextdns.io"
-
-
-NEXTDNS_API_BASE = _resolve_api_base()
+KIND = "NextDNS_API_Stats"
 
 
 def validate_input(definition: smi.ValidationDefinition):
     return
 
 
-def logger_for_input(input_name: str) -> logging.Logger:
-    return log.Logs().get_logger(f"{ADDON_NAME.lower()}_{input_name}")
-
-
-def get_account_api_key(session_key: str, account_name: str):
-    cfm = conf_manager.ConfManager(
-        session_key,
-        ADDON_NAME,
-        realm=f"__REST_CREDENTIAL__#{ADDON_NAME}#configs/conf-{REST_PATH}_account",
-    )
-    account_conf_file = cfm.get_conf(f"{REST_PATH}_account")
-    return account_conf_file.get(account_name).get("api_key")
-
-
-def get_data_from_api(logger: logging.Logger, api_key: str, profile: str, analytic_type: str):
-    logger.info("Getting data from an external API")
-    resp = requests.get(f"{NEXTDNS_API_BASE}/profiles/{profile}/analytics/{analytic_type}", headers={"x-api-key": api_key})
-    return resp.json()
+def collect(client, profile, types, window):
+    """{type: rows} for the window. Raises on any failure (nothing is written)."""
+    start, end = window
+    return {t: client.analytics(profile, t, start, end) for t in types}
 
 
 def stream_events(inputs: smi.InputDefinition, ew: smi.EventWriter):
-    # inputs.inputs is a Python dictionary object like:
-    # {
-    #   "NextDNS_getStats://<input_name>": {
-    #     "account": "<account_name>",
-    #     "disabled": "0",
-    #     "host": "$decideOnStartup",
-    #     "index": "<index_name>",
-    #     "interval": "<interval_value>",
-    #     "python.version": "python3",
-    #   },
-    # }
-    for input_name, input_item in inputs.inputs.items():
-        normalized_input_name = input_name.split("/")[-1]
-        logger = logger_for_input(normalized_input_name)
+    checkpoint_dir = inputs.metadata.get("checkpoint_dir", ".")
+    session_key = inputs.metadata["session_key"]
+    for input_name, item in inputs.inputs.items():
+        name = input_name.split("://")[-1]
+        logger = logger_for_input(name)
+        setup_logger(logger, session_key)
+        log.modular_input_start(logger, name)
         try:
-            session_key = inputs.metadata["session_key"]
-            log_level = conf_manager.get_log_level(
-                logger=logger,
-                session_key=session_key,
-                app_name=ADDON_NAME,
-                conf_name=f"{REST_PATH}_settings",
-            )
-            logger.setLevel(log_level)
-            log.modular_input_start(logger, normalized_input_name)
-            api_key = get_account_api_key(session_key, input_item.get("account"))
-            sourcetype_base = "NextDNS_API_Stats"
-            for analytic_type in ["status", "protocols", "devices", "ips", "reasons", "domains", "queryTypes", "ipVersions", "dnssec", "encryption"]:
-                data = get_data_from_api(logger, api_key, input_item.get("profile"), analytic_type)["data"]
-                sourcetype = f"{sourcetype_base}:{analytic_type}"
-                for line in data:
+            types, unknown = nd.selected_types(item.get("sections"))
+            if unknown:
+                logger.warning("input=%s ignoring unknown sections count=%d", name, len(unknown))
+            profile = item.get("profile")
+            if not profile:
+                raise ValueError("input has no profile")
+            checkpoint = nd.FileCheckpoint(checkpoint_dir, KIND, name)
+            window = nd.next_window(checkpoint.load(), now_ms(), LAG_MS, LOOKBACK_MS, MAX_WINDOW_MS)
+            if window is None:
+                logger.info("input=%s nothing to collect yet", name)
+                continue
+            client = nd.Client(get_account_api_key(session_key, item.get("account")))
+            data = collect(client, profile, types, window)
+            start, end = window
+            extra = {"window_start": nd.iso_ms(start), "window_end": nd.iso_ms(end)}
+            written = 0
+            for analytic_type in types:
+                for row in data[analytic_type]:
+                    body = dict(row)
+                    body.update(extra)
                     ew.write_event(
                         smi.Event(
-                            data=json.dumps(line, ensure_ascii=False, default=str),
-                            index=input_item.get("index"),
-                            sourcetype=sourcetype,
-                            host=input_item.get("profile"),
+                            data=json.dumps(body, ensure_ascii=False, default=str),
+                            time="%.3f" % (start / 1000.0),
+                            index=item.get("index"),
+                            sourcetype="{}:{}".format(KIND, analytic_type),
+                            host=profile,
                         )
                     )
-
-            log.modular_input_end(logger, normalized_input_name)
-        except Exception as e:
-            log.log_exception(logger, e, "my custom error type", msg_before="Exception raised while ingesting data for demo_input: ")
-
-    # input_items = [{"count": len(inputs.inputs)}]
-    # for input_name, input_item in inputs.inputs.items():
-    #     input_item["name"] = input_name
-    #     input_items.append(input_item)
-    # event = smi.Event(
-    #     data=json.dumps(input_items),
-    #     sourcetype="NextDNS_API_Stats",
-    # )
-    # ew.write_event(event)
+                    written += 1
+            checkpoint.save(end)
+            logger.info(
+                "input=%s run complete events=%d types=%d requests=%d duplicates_dropped=%d window_seconds=%d",
+                name, written, len(types), client.requests_made, client.duplicates_dropped, (end - start) // 1000,
+            )
+        except nd.NextDNSError as exc:
+            logger.error("input=%s run failed: %s", name, exc)
+        except Exception:
+            logger.exception("input=%s run failed", name)
+        finally:
+            log.modular_input_end(logger, name)
