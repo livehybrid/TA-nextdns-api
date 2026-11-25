@@ -55,6 +55,25 @@ jobs:
       splunkbase_username: ${{ secrets.SPLUNKBASE_USERNAME }}
       splunkbase_password: ${{ secrets.SPLUNKBASE_PASSWORD }}
   
+  unit:
+    name: unit (python ${{ matrix.python }})
+    if: github.event_name != 'schedule'
+    # ubuntu-24.04: ubuntu-latest (26.04) has no Python 3.9.
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install "requests>=2.32.0,<2.33.0" "pytest>=8"
+      - run: pytest tests/unit -v -p no:cacheprovider
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+
   integration-test:
     name: integration-test (splunk-docker)
     needs: package
@@ -99,29 +118,27 @@ jobs:
           SPLUNK_IMAGE_TAG: ${{ matrix.splunk }}
         run: docker compose up -d --wait --wait-timeout 360
 
-      - name: Run integration suite
+      - name: Run integration suite (mock upstream)
         env:
           SPLUNK_MGMT_URL: https://127.0.0.1:8089
           SPLUNK_USER: admin
           SPLUNK_PASSWORD: Changeme1!
           SPLUNK_CONTAINER: ta_nextdns_api_splunk
-        run: pytest tests/ -v -ra
+          SPLUNK_IMAGE_TAG: ${{ matrix.splunk }}
+        run: pytest tests --ignore=tests/live --ignore=tests/unit -v -ra -p no:cacheprovider
 
-      - name: Diagnostics on failure
+      - name: Diagnostics on failure (synthetic data only)
         if: failure()
         working-directory: docker
         run: |
-          echo "===== did NEXTDNS_API_BASE reach splunkd's environment? ====="
-          pid=$(docker exec ta_nextdns_api_splunk bash -lc "pgrep -f 'splunkd.*-p ' | head -1") || true
-          docker exec ta_nextdns_api_splunk bash -lc "tr '\0' '\n' < /proc/${pid}/environ 2>/dev/null | grep -i nextdns" || echo "(NEXTDNS_API_BASE not in splunkd env)"
-          echo "===== inputs.conf (were the inputs created + enabled?) ====="
+          echo "===== inputs.conf ====="
           docker exec ta_nextdns_api_splunk /opt/splunk/bin/splunk btool inputs list --app=TA-nextdns-api 2>/dev/null || true
-          echo "===== collector add-on logs (which URL, any exception) ====="
-          docker exec ta_nextdns_api_splunk bash -lc 'tail -n 120 /opt/splunk/var/log/splunk/ta-nextdns-api_*.log 2>/dev/null' || echo "(no add-on logs)"
-          echo "===== mock request log (did the collectors reach the mock?) ====="
-          docker compose logs --tail 100 mock || true
+          echo "===== add-on logs ====="
+          docker exec -u root ta_nextdns_api_splunk bash -lc 'tail -n 60 /opt/splunk/var/log/splunk/ta-nextdns-api_*.log 2>/dev/null' || echo "(no add-on logs)"
+          echo "===== mock requests by path and status ====="
+          curl -s http://127.0.0.1:8080/__mock/requests | python3 -c "import collections,json,sys; print(collections.Counter((r['path'], r['status']) for r in json.load(sys.stdin)['data']).most_common(40))" || true
           echo "===== splunkd.log tail ====="
-          docker exec ta_nextdns_api_splunk tail -n 120 /opt/splunk/var/log/splunk/splunkd.log || true
+          docker exec ta_nextdns_api_splunk tail -n 80 /opt/splunk/var/log/splunk/splunkd.log || true
 
       - name: Tear down
         if: always()
@@ -130,19 +147,21 @@ jobs:
 
   live-real-api:
     name: live-real-api (real NextDNS)
-    # Real-API canary: pulls genuine data with the API key fetched from
-    # 1Password at runtime (OP_SERVICE_ACCOUNT_TOKEN). NON-gating: publish-gh
-    # does not depend on it, so real-API flakiness or drift never blocks a
-    # release. To conserve Actions minutes it runs only on the weekly
-    # schedule, manual dispatch, main pushes and release tags — not on every
-    # branch push.
+    # Every input against the real api.nextdns.io in real Splunk. Only on
+    # pushes to main, the weekly schedule and manual runs: never for pull
+    # requests or other branches, never for Dependabot. Not a release gate.
+    # William's DNS data is private and this repo is public: the tests assert
+    # and print counts and field names only, pytest runs with --tb=no -rN, and
+    # nothing from Splunk or the add-on is dumped on failure.
     if: >-
-      ${{ github.actor != 'dependabot[bot]' &&
-          (github.event_name == 'schedule' ||
-           github.event_name == 'workflow_dispatch' ||
-           github.ref == 'refs/heads/main' ||
-           startsWith(github.ref, 'refs/tags/')) }}
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name == 'schedule' ||
+       github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -155,62 +174,62 @@ jobs:
       - name: Build add-on into stage/ (no mock override -> real API)
         shell: bash
         run: |
-          ucc-gen build --source package --ta-version 1.1.0
+          ucc-gen build --source package --ta-version 1.1.0 >/dev/null
           rm -rf stage && mkdir -p stage
           cp -r output/TA-nextdns-api stage/TA-nextdns-api
-          # Deliberately NO local/nextdns_api_base override here, so the
-          # collectors hit the real api.nextdns.io.
           chmod -R 777 stage/TA-nextdns-api
 
-      - name: Start Splunk (real API base, wait for health)
+      - name: Start Splunk (real API base)
         working-directory: docker
         env:
           NEXTDNS_API_BASE: https://api.nextdns.io
-        run: docker compose up -d --wait --wait-timeout 360
+          SPLUNK_IMAGE_TAG: "10.6.0"
+        run: docker compose up -d --wait --wait-timeout 360 >/dev/null
 
-      - name: Load NEXTDNS_API_KEY from 1Password
+      - name: Load the API key
         env:
+          SECRET_KEY: ${{ secrets.NEXTDNS_API_KEY }}
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
         shell: bash
         run: |
-          if [ -z "$OP_SERVICE_ACCOUNT_TOKEN" ]; then
-            echo "OP_SERVICE_ACCOUNT_TOKEN unavailable — canary will skip." >&2
-            exit 0
+          KEY="$SECRET_KEY"
+          SRC=secret
+          if [ -z "$KEY" ] && [ -n "$OP_SERVICE_ACCOUNT_TOKEN" ]; then
+            curl -sSfL https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_linux_amd64_v2.30.0.zip -o /tmp/op.zip
+            (cd /tmp && unzip -oq op.zip op && sudo mv op /usr/local/bin/op)
+            KEY=$(op read "op://cicd/my.nextdns.io/password")
+            SRC=1password
+            echo "::add-mask::$KEY"
           fi
-          curl -sSfL https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_linux_amd64_v2.30.0.zip -o /tmp/op.zip
-          (cd /tmp && unzip -oq op.zip op && sudo mv op /usr/local/bin/op)
-          KEY=$(op read "op://cicd/my.nextdns.io/password")
-          if [ -z "$KEY" ]; then echo "empty key from op" >&2; exit 1; fi
-          # op-loaded values are NOT auto-masked — mask before exporting.
-          echo "::add-mask::$KEY"
+          if [ -z "$KEY" ]; then echo "no NextDNS key available" >&2; exit 1; fi
+          echo "key source: $SRC"
           echo "NEXTDNS_API_KEY=$KEY" >> "$GITHUB_ENV"
 
-      - name: Run real-API canary
+      - name: Live end to end (counts only)
         env:
           SPLUNK_MGMT_URL: https://127.0.0.1:8089
           SPLUNK_USER: admin
           SPLUNK_PASSWORD: Changeme1!
           SPLUNK_CONTAINER: ta_nextdns_api_splunk
-        run: pytest tests/test_live_real.py -v -ra
+          SPLUNK_IMAGE_TAG: "10.6.0"
+          LIVE_SUMMARY: ${{ runner.temp }}/live-summary.json
+        run: pytest tests/live -v --tb=no -rN -p no:cacheprovider -p no:warnings
 
-      - name: Collector logs on failure
-        if: failure()
-        working-directory: docker
-        run: |
-          docker exec ta_nextdns_api_splunk /opt/splunk/bin/splunk search \
-            'search index=_internal source=*ta-nextdns* (nextdns OR NextDNS) earliest=-15m | head 20 | table _time component _raw' \
-            -auth admin:Changeme1! 2>&1 | head -40 || true
+      - name: Summary (counts and field names only)
+        if: always()
+        run: cat "${{ runner.temp }}/live-summary.json" 2>/dev/null || echo "no summary written"
 
       - name: Tear down
         if: always()
         working-directory: docker
-        run: docker compose down -v || true
+        run: docker compose down -v >/dev/null 2>&1 || true
 
   publish-gh:
     permissions:
       contents: write
     needs:
       - appinspect
+      - unit
       - integration-test
     uses: livehybrid/deploy-splunk-app-action/.github/workflows/publish.yml@main
 

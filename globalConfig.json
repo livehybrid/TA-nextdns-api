@@ -214,6 +214,10 @@
                                         "value": "queryTypes"
                                     },
                                     {
+                                        "label": "IP Versions",
+                                        "value": "ipVersions"
+                                    },
+                                    {
                                         "label": "DNSSEC",
                                         "value": "dnssec"
                                     },
@@ -223,7 +227,7 @@
                                     }
                                 ]
                             },
-                            "help": "If none selected, all will be logged under different sourcetypes. See Help page for more info",
+                            "help": "Analytics types to collect, each under its own sourcetype (NextDNS_API_Stats:<type>). If none are selected, all are collected.",
                             "field": "sections"
                         },
                         {
@@ -242,7 +246,7 @@
                         }
                     ],
                     "inputHelperModule": "getStats_helper",
-                    "title": "NextDNS Stats"
+                    "title": "NextDNS Analytics"
                 },
                 {
                     "name": "NextDNS_API_Stream",
@@ -337,10 +341,17 @@
                                 "labelField": "profile"
                             },
                             "field": "profile"
+                        },
+                        {
+                            "type": "checkbox",
+                            "label": "All queries (raw)",
+                            "field": "raw",
+                            "defaultValue": false,
+                            "help": "Off (default): A, AAAA and HTTPS queries with repeats and background noise removed, as in the NextDNS log view. On: every DNS query."
                         }
                     ],
                     "inputHelperModule": "getStream_helper",
-                    "title": "NextDNS Stream"
+                    "title": "NextDNS Query Log"
                 }
             ],
             "title": "Inputs",
