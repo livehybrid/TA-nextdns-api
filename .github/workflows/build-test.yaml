@@ -207,6 +207,7 @@ jobs:
 
       - name: Live end to end (counts only)
         env:
+          REQUIRE_LIVE: "tests/live/"
           SPLUNK_MGMT_URL: https://127.0.0.1:8089
           SPLUNK_USER: admin
           SPLUNK_PASSWORD: Changeme1!
